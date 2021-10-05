@@ -146,6 +146,7 @@ void sr_handlepacket(struct sr_instance* sr,
         if(ip_header -> ip_p == ip_protocol_icmp){ 
           sr_icmp_hdr_t *icmp_header_for_interface = (sr_icmp_hdr_t *) (packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
           if(icmp_header_for_interface -> icmp_type == 8){ /* ICMP echo request */
+            printf("This is echo request\n");
             /* Send ICMP echo reply */
             uint8_t *icmp_reply = (uint8_t *) malloc(len);
             memcpy(icmp_reply, packet, len);
@@ -176,16 +177,38 @@ void sr_handlepacket(struct sr_instance* sr,
 
         }else if(ip_header -> ip_p == 6 || ip_header -> ip_p == 17){ /* TCP/UDP payload */
           /* Send ICMP port unreachable */
+            printf("This is TCP payload\n");
             uint8_t *icmp_reply = (uint8_t *) malloc(sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
             prepare_eth_header_response((sr_ethernet_hdr_t *) icmp_reply, eth_header -> ether_shost, eth_header -> ether_dhost, ethertype_ip);
 
           /* Prepare ip header for ICMP TCP/UDP payload reply */
             sr_ip_hdr_t *response_ip_header = (sr_ip_hdr_t *) (icmp_reply + sizeof(sr_ethernet_hdr_t));
             memcpy(response_ip_header, ip_header, sizeof(sr_ip_hdr_t));
-            memcpy(&(response_ip_header -> ip_dst), &(ip_header -> ip_src), 4);
-            memcpy(&(response_ip_header -> ip_src), &(ip_header -> ip_dst), 4);
-            memset(&(response_ip_header -> ip_sum), 0, 2);
-            response_ip_header -> ip_sum = cksum(response_ip_header, sizeof(sr_ip_hdr_t));
+            response_ip_header->ip_src = ip_header->ip_dst;
+            response_ip_header->ip_dst = ip_header->ip_src;
+            response_ip_header->ip_len = htons(sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
+            response_ip_header->ip_ttl = 64;
+            response_ip_header->ip_p = ip_protocol_icmp;
+            response_ip_header->ip_sum = 0;
+            response_ip_header->ip_sum = cksum(response_ip_header, sizeof(sr_ip_hdr_t));
+
+          /* Prepare ICMP header */
+            sr_icmp_t3_hdr_t *response_icmp_header = (sr_icmp_t3_hdr_t *) (icmp_reply + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+            response_icmp_header->icmp_type = 3;
+            response_icmp_header->icmp_code = 3;
+            response_icmp_header->icmp_sum = 0;
+            response_icmp_header->unused = 0;
+            response_icmp_header->next_mtu = 0;
+
+            memcpy(response_icmp_header->data, ip_header, sizeof(sr_ip_hdr_t));
+            memcpy(response_icmp_header->data + sizeof(sr_ip_hdr_t), packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t), 8);
+
+            response_icmp_header->icmp_sum = cksum(response_icmp_header, sizeof(sr_icmp_t3_hdr_t));
+
+            print_hdr_eth((uint8_t *) eth_header);
+            print_hdr_eth((uint8_t *) icmp_reply);
+            printf("%s\n", interface->name);
+            sr_send_packet(sr, icmp_reply, sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t), interface->name);
 
             free(icmp_reply);
 
@@ -220,9 +243,15 @@ void sr_handlepacket(struct sr_instance* sr,
         }else{ 
           printf("found address\n");
           if(ip_header -> ip_ttl - 1 == 0){ /* Send type 11 code 0 ICMP reply */ 
+          printf("TTL is 0\n");
 
           }else{ /* Find the mac address for the IP address */
             struct sr_arpentry *arp_value = sr_arpcache_lookup(&(sr -> cache), ip_header -> ip_dst);
+            /* Recompute TTL and IP checksum */
+            ip_header->ip_ttl--;
+            ip_header->ip_sum = 0;
+            ip_header->ip_sum = cksum((uint8_t *) ip_header, sizeof(sr_ip_hdr_t));
+      
             if(arp_value == NULL){ /* Send ARP request as MAC address for entry is not found */
 
               sr_arpcache_queuereq(&(sr -> cache), ip_header -> ip_dst, packet, len, current_max_entry -> interface);
