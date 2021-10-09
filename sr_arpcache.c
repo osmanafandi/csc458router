@@ -17,21 +17,17 @@
   See the comments in the header file for an idea of what it should look like.
 */
 void sr_arpcache_sweepreqs(struct sr_instance *sr) { 
-    /* Fill this in */
     struct sr_arpcache *arp_cache = &(sr -> cache);
     struct sr_arpreq *arp_req = arp_cache -> requests;
     while(arp_req != NULL){
         if(difftime(time(NULL), arp_req -> sent) > 1.0){ /* Check if enough time has passed */
             if(arp_req->times_sent >= 5){ /* Send ICMP timeout */
-                printf("Did not receive any results for ARP req\n");
                 struct sr_packet *packets = arp_req->packets;
                 while(packets){
-                    printf("Sending packets' receivers destination host unreachable\n");
                     handle_icmp_reply(1, 3, packets->buf, sr, packets->len);
                     packets = packets->next;     
                 }
             }else{ /* Send ARP request */
-                printf("Sending ARP request to get the MAC address for destinatino IP address\n");
                 uint8_t *arp_request = (uint8_t *) malloc(sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t));
                 sr_ethernet_hdr_t *eth_header = (sr_ethernet_hdr_t *) arp_request;
                 sr_arp_hdr_t *arp_header = (sr_arp_hdr_t *) (arp_request + sizeof(sr_ethernet_hdr_t));
@@ -68,7 +64,7 @@ void sr_arpcache_sweepreqs(struct sr_instance *sr) {
                 /* Update necessary fields for arp_req */
                 arp_req->sent = time(NULL);
                 arp_req->times_sent++;
-                
+
                 free(arp_request);
             }
         }

@@ -53,13 +53,17 @@ void sr_init(struct sr_instance* sr)
 } /* -- sr_init -- */
 
 
-
+/* Fills in appropriate values for ethernet header pointed by new_eth_header */
 void prepare_eth_header_response(sr_ethernet_hdr_t *new_eth_header, uint8_t *destination, uint8_t *source, uint16_t type){
   memcpy(new_eth_header-> ether_dhost, destination, ETHER_ADDR_LEN);
   memcpy(new_eth_header-> ether_shost, source, ETHER_ADDR_LEN);
   new_eth_header -> ether_type = htons(type);
 }
 
+
+/* Given ARP request header pointed by old_arp_header and MAC address for ARP response header, 
+ * fills in appropriat values for response ARP header pointed by new_arp_header.
+ */
 void prepare_arp_header_resposne(sr_arp_hdr_t *new_arp_header, sr_arp_hdr_t *old_arp_header, unsigned char *mac_address){
   memcpy(new_arp_header, old_arp_header, sizeof(sr_arp_hdr_t));
   new_arp_header -> ar_op = htons(arp_op_reply);
@@ -69,6 +73,17 @@ void prepare_arp_header_resposne(sr_arp_hdr_t *new_arp_header, sr_arp_hdr_t *old
   memcpy(new_arp_header -> ar_sha, mac_address, ETHER_ADDR_LEN);
 }
 
+
+/* Prepares and sends following ICMP messages:
+ * - Echo reply: tyoe 0
+ * - Destination net unreachable: type 3 code 0
+ * - Destination host unreachable: type 3 code 1
+ * - Port uncreachable: type 3 code 3
+ * - Time exceeded: type 11 code0
+*
+ * Note: length parameter is only relevant for Echo reply. For all other supported
+ * ICMP messages, length parameter can be set to any integer.
+ */
 void handle_icmp_reply(uint8_t code, uint8_t type, uint8_t *packet, struct sr_instance *sr, int length){
 
   int final_length;
@@ -138,7 +153,6 @@ void handle_icmp_reply(uint8_t code, uint8_t type, uint8_t *packet, struct sr_in
     memcpy(response_icmp_header->data + sizeof(sr_ip_hdr_t), packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t), 8);
     response_icmp_header->icmp_sum = cksum(response_icmp_header, sizeof(sr_icmp_t3_hdr_t));
   }
-
 
   sr_send_packet(sr, icmp_reply, final_length, interface->name);
 
@@ -238,13 +252,11 @@ void sr_handlepacket(struct sr_instance* sr,
 
       }else if(ip_header -> ip_p == 6 || ip_header -> ip_p == 17){ /* TCP/UDP payload */
         /* Send ICMP port unreachable */
-        printf("TCP/UDP payload to touer's interface\n");
         handle_icmp_reply(3, 3, packet, sr, 0);
       }
     }else{ /* Packet is destined somewhere else */
 
       /* Find from routing table which interface should be used to send the packet */
-      printf("Packet is destined somewhere else\n");
       struct sr_rt *routing_table = sr -> routing_table;
       struct sr_rt *current_max_entry = NULL;
       int current_max = 0;
@@ -266,13 +278,13 @@ void sr_handlepacket(struct sr_instance* sr,
       }
 
       if(current_max_entry == NULL){ /* Send type3 code 0 ICMP reply */
-          printf("Destination net unreachable\n");
           handle_icmp_reply(0, 3, packet, sr, len);
+
       }else{ 
-          printf("Searching for MAC address of destination IP address\n");
+
         if(ip_header -> ip_ttl - 1 == 0){ /* Send type 11 code 0 ICMP reply */ 
-          printf("TTL is 0\n");
           handle_icmp_reply(0, 11, packet, sr, len);
+
         }else{ /* Find the mac address for the IP address */
           struct sr_arpentry *arp_value = sr_arpcache_lookup(&(sr -> cache), ip_header -> ip_dst);
 
@@ -282,11 +294,9 @@ void sr_handlepacket(struct sr_instance* sr,
           ip_header->ip_sum = cksum((uint8_t *) ip_header, sizeof(sr_ip_hdr_t));
     
           if(arp_value == NULL){ /* Send ARP request as MAC address for entry is not found */
-            printf("Did not find the MAC address for destination IP address\n");
             sr_arpcache_queuereq(&(sr -> cache), ip_header -> ip_dst, packet, len, current_max_entry -> interface);
 
           }else{ /* Generate apropriate values and redirect.0 the packet */
-            printf("Redirecting the packet\n");
             struct sr_if *interface = sr-> if_list;
               while(interface){
                   if(strcmp(interface->name, current_max_entry->interface) == 0){
@@ -312,24 +322,27 @@ void sr_handlepacket(struct sr_instance* sr,
     sr_arp_hdr_t *arp_header = (sr_arp_hdr_t *) (packet + sizeof(sr_ethernet_hdr_t));
 
     if(ntohs(arp_header -> ar_op) == arp_op_request){ /* Handle ARP requests */
-      printf("This ARP request\n");
+
       uint8_t *arp_reply = malloc(sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t));
       sr_ethernet_hdr_t *response_eth_header = (sr_ethernet_hdr_t *) arp_reply;
+
       /* Find if the IP address being searched is one of router interfaces' */ 
       struct sr_if *interface = sr -> if_list;
       while(interface -> ip != arp_header -> ar_tip){
         interface = interface -> next;
       }
       if(interface){ /* IP address being searched is one of router's interfaces */ 
+
         sr_ethernet_hdr_t *response_eth_header = (sr_ethernet_hdr_t *) arp_reply;
         sr_arp_hdr_t *response_arp_header = (sr_arp_hdr_t *) (arp_reply + sizeof(sr_ethernet_hdr_t));
         prepare_eth_header_response(response_eth_header, eth_header -> ether_shost, interface -> addr, ethertype_arp);
         prepare_arp_header_resposne(response_arp_header, arp_header, interface -> addr);
         sr_send_packet(sr, arp_reply, sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t), interface -> name);
       }
+
       free(arp_reply);
+
     }else if(ntohs(arp_header -> ar_op) == arp_op_reply){ /* Handle ARP reply accordingly */
-      printf("This ARP reply\n");
 
       struct sr_arpreq *arp_req = sr_arpcache_insert(&(sr->cache), arp_header->ar_sha, arp_header->ar_sip);
       if(arp_req != NULL){
@@ -345,6 +358,7 @@ void sr_handlepacket(struct sr_instance* sr,
         }
 
         while(arp_packets){ /* Forward Packets */
+
           sr_ethernet_hdr_t *redirect_eth = (sr_ethernet_hdr_t *) arp_packets->buf;
           memcpy(redirect_eth->ether_shost, interface->addr, ETHER_ADDR_LEN);
           memcpy(redirect_eth->ether_dhost, arp_header->ar_sha, ETHER_ADDR_LEN);
