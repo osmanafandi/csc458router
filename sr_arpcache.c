@@ -21,58 +21,15 @@ void sr_arpcache_sweepreqs(struct sr_instance *sr) {
     struct sr_arpcache *arp_cache = &(sr -> cache);
     struct sr_arpreq *arp_req = arp_cache -> requests;
     while(arp_req != NULL){
-        /* Find mac address of appropriate interface */
-        struct sr_if *interface = sr-> if_list;
-        while(interface){
-            if(strcmp(interface->name, arp_req->packets->iface) == 0){
-                break;
-            }
-            interface = interface->next;
-        }
-        if(difftime(time(NULL), arp_req -> sent) > 1.0){
+        if(difftime(time(NULL), arp_req -> sent) > 1.0){ /* Check if enough time has passed */
             if(arp_req->times_sent >= 5){ /* Send ICMP timeout */
                 printf("Did not receive any results for ARP req\n");
                 struct sr_packet *packets = arp_req->packets;
                 while(packets){
                     printf("Sending packets' receivers destination host unreachable\n");
-                    sr_ip_hdr_t *ip_header = (sr_ip_hdr_t *) (packets->buf + sizeof(sr_ethernet_hdr_t));
-
-                    uint8_t *icmp_reply = (uint8_t *) malloc(sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
-                    sr_ethernet_hdr_t *eth_header = (sr_ethernet_hdr_t *) icmp_reply;
-                    memcpy(eth_header->ether_shost, interface->addr, ETHER_ADDR_LEN);
-                    memcpy(eth_header->ether_dhost, ((sr_ethernet_hdr_t *)packets->buf)->ether_shost, ETHER_ADDR_LEN);
-
-                /* Prepare ip header for ICMP TCP/UDP payload reply */
-                    sr_ip_hdr_t *response_ip_header = (sr_ip_hdr_t *) (icmp_reply + sizeof(sr_ethernet_hdr_t));
-                    memcpy(response_ip_header, ip_header, sizeof(sr_ip_hdr_t));
-                    response_ip_header->ip_src = interface->ip;
-                    response_ip_header->ip_dst = ip_header->ip_src;
-                    response_ip_header->ip_len = htons(sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
-                    response_ip_header->ip_ttl = 64;
-                    response_ip_header->ip_p = ip_protocol_icmp;
-                    response_ip_header->ip_sum = 0;
-                    response_ip_header->ip_sum = cksum(response_ip_header, sizeof(sr_ip_hdr_t));
-
-                /* Prepare ICMP header */
-                    sr_icmp_t3_hdr_t *response_icmp_header = (sr_icmp_t3_hdr_t *) (icmp_reply + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
-                    response_icmp_header->icmp_type = 3;
-                    response_icmp_header->icmp_code = 1;
-                    response_icmp_header->icmp_sum = 0;
-                    response_icmp_header->unused = 0;
-                    response_icmp_header->next_mtu = 0;
-
-                    memcpy(response_icmp_header->data, ip_header, sizeof(sr_ip_hdr_t));
-                    memcpy(response_icmp_header->data + sizeof(sr_ip_hdr_t), packets->buf + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t), 8);
-
-                    response_icmp_header->icmp_sum = cksum(response_icmp_header, sizeof(sr_icmp_t3_hdr_t));
-
-                    sr_send_packet(sr, icmp_reply, sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t), interface->name);
-
-                    free(icmp_reply);    
+                    handle_icmp_reply(1, 3, packets->buf, sr, packets->len);
                     packets = packets->next;     
                 }
-                   
-
             }else{ /* Send ARP request */
                 printf("Sending ARP request to get the MAC address for destinatino IP address\n");
                 uint8_t *arp_request = (uint8_t *) malloc(sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t));
@@ -97,12 +54,22 @@ void sr_arpcache_sweepreqs(struct sr_instance *sr) {
                 memcpy(arp_header->ar_sha, interface->addr, ETHER_ADDR_LEN);
                 arp_header->ar_sip = interface->ip;
 
+                /* Find the name of appropriate interface */
+                struct sr_if *interface = sr-> if_list;
+                while(interface){
+                    if(strcmp(interface->name, arp_req->packets->iface) == 0){
+                        break;
+                    }
+                    interface = interface->next;
+                }
+
                 sr_send_packet(sr, arp_request, sizeof(sr_arp_hdr_t) + sizeof(sr_ethernet_hdr_t), interface->name);
+                
+                /* Update necessary fields for arp_req */
                 arp_req->sent = time(NULL);
                 arp_req->times_sent++;
+                
                 free(arp_request);
-
-
             }
         }
         arp_req = arp_req -> next;

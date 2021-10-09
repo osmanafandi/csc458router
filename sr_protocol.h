@@ -188,3 +188,6 @@ typedef struct sr_arp_hdr sr_arp_hdr_t;
 #define sr_IFACE_NAMELEN 32
 
 #endif /* -- SR_PROTOCOL_H -- */
+
+void handle_icmp_reply(uint8_t code, uint8_t type, uint8_t *packet, struct sr_instance *sr, int length);
+
